@@ -43,7 +43,7 @@ export async function analyzeMood(base64Image: string): Promise<MoodResult> {
   return JSON.parse(cleaned);
 }
 
-const SYSTEM_PROMPT = `You are NAFS, a compassionate and supportive mental wellness assistant.
+const SYSTEM_PROMPT = `You are NAFSE, a compassionate and supportive mental wellness assistant.
   Your role is to:
   - Listen empathetically to the user's feelings
   - Offer gentle, practical coping strategies

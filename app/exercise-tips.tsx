@@ -67,7 +67,7 @@ export default function ExerciseTipsScreen() {
           activeOpacity={0.85}
           onPress={() => router.push('/(tabs)/chatbot')}
         >
-          <Text style={styles.chatButtonText}>Chat with NAFS</Text>
+          <Text style={styles.chatButtonText}>Chat with NAFSE</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

@@ -181,7 +181,7 @@ export default function HomeScreen() {
             >
               <ChildIcon size={28} color="#26A69A" />
             </View>
-            <Text style={styles.tileText}>Children{"\n"}Wellness</Text>
+            <Text style={styles.tileText}>Children{"\n"}Mood</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.tile}
