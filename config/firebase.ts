@@ -2,7 +2,7 @@ import { getApp, getApps, initializeApp } from "firebase/app";
 // @ts-ignore – getReactNativePersistence exists in the RN bundle but TS resolves to web types
 import {
   getAuth,
-  // getReactNativePersistence,
+  getReactNativePersistence,
   initializeAuth,
 } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
@@ -22,7 +22,7 @@ const app = isFirstInit ? initializeApp(firebaseConfig) : getApp();
 // initializeAuth must only be called once; on hot reload use getAuth
 const auth = isFirstInit
   ? initializeAuth(app, {
-      // persistence: getReactNativePersistence(AsyncStorage),
+      persistence: getReactNativePersistence(AsyncStorage),
     })
   : getAuth(app);
 
