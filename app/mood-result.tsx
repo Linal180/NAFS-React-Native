@@ -3,8 +3,10 @@ import { useState } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Image, ActivityIndicator, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NAFS } from '@/constants/theme';
+import { getMoodMeta, normalizeMoodId } from '@/constants/moods';
 import { useAuth } from '@/contexts/auth-context';
 import { saveMood } from '@/lib/mood-storage';
+import { loadLocalMoodState, persistMoodHistory, persistSelectedMood } from '@/lib/local-mood-history';
 
 const MOODS = [
   { label: 'Happy', emoji: '😊', description: "You're radiating positivity! Let's keep the good vibes going." },
@@ -48,21 +50,40 @@ export default function MoodResultScreen() {
   };
 
   const confirmAndContinue = async () => {
-    if (!user) return;
     setSaving(true);
+    const moodId = normalizeMoodId(selectedMood);
+    const meta = getMoodMeta(moodId);
+
     try {
-      await saveMood(user.uid, {
-        mood: selectedMood,
-        emoji: selectedEmoji,
-        confidence: selectedConfidence,
-        description: selectedDescription,
-      });
+      if (user) {
+        await saveMood(user.uid, {
+          mood: selectedMood,
+          emoji: selectedEmoji,
+          confidence: selectedConfidence,
+          description: selectedDescription,
+        });
+      }
+
+      // Keep Home's mood history in sync (local, last 5).
+      const local = await loadLocalMoodState();
+      const next = [
+        {
+          id: `${Date.now()}-${moodId}-${Math.random().toString(36).slice(2, 6)}`,
+          moodId,
+          timestamp: new Date().toISOString(),
+        },
+        ...local.moodHistory,
+      ].slice(0, 5);
+
+      await persistSelectedMood(moodId);
+      await persistMoodHistory(next);
     } catch (e) {
       console.error('Failed to save mood:', e);
     }
+
     router.push({
       pathname: '/daily-plan',
-      params: { mood: selectedMood, emoji: selectedEmoji },
+      params: { mood: moodId, emoji: meta.emoji },
     });
   };
 
@@ -131,7 +152,7 @@ export default function MoodResultScreen() {
           {saving ? (
             <ActivityIndicator color={NAFS.white} />
           ) : (
-            <Text style={styles.confirmButtonText}>Yes, that's right</Text>
+            <Text style={styles.confirmButtonText}>Yes, that&apos;s right</Text>
           )}
         </TouchableOpacity>
 

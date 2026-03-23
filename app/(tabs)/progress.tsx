@@ -1,220 +1,267 @@
-import { useEffect, useState, useCallback } from 'react';
-import { StyleSheet, View, Text, ScrollView, Dimensions, ActivityIndicator, Image } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Path, Circle, Line, Text as SvgText, G, Defs, LinearGradient, Stop } from 'react-native-svg';
-import { NAFS } from '@/constants/theme';
-import { useAuth } from '@/contexts/auth-context';
-import { getMoodHistory, type StoredMoodEntry } from '@/lib/mood-storage';
-import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
+import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 
-const screenWidth = Dimensions.get('window').width;
+import { NAFS } from "@/constants/theme";
+import { useAuth } from "@/contexts/auth-context";
+import { getMoodHistory, type StoredMoodEntry } from "@/lib/mood-storage";
+import { MoodCard } from "@/components/MoodCard";
+import { StatCard } from "@/components/StatCard";
 
-const MOOD_SCORES: Record<string, number> = {
-  Happy: 90,
-  Calm: 75,
-  Neutral: 50,
-  Surprised: 55,
-  Tired: 35,
-  Sad: 25,
-  Anxious: 20,
-  Angry: 15,
+type MoodDay = {
+  dayKey: string;
+  day: string;
+  emoji: string;
+  score: number; // 0-100
+  hasEntry: boolean;
 };
 
-const CHART_WIDTH = screenWidth - 80;
-const CHART_HEIGHT = 180;
-const PADDING_LEFT = 36;
-const PADDING_RIGHT = 16;
-const PADDING_TOP = 16;
-const PADDING_BOTTOM = 32;
-const plotWidth = CHART_WIDTH - PADDING_LEFT - PADDING_RIGHT;
-const plotHeight = CHART_HEIGHT - PADDING_TOP - PADDING_BOTTOM;
-const MAX_VAL = 100;
+const MOCK_MOOD_EMOJIS = ["🙂", "😐", "🙂", "😔", "😐", "🙂", "😔"] as const;
+const MOCK_STATS = {
+  completedExercises: 12,
+  activeDays: 5,
+  moodImprovement: 15,
+} as const;
 
-function buildSmoothPath(pts: { x: number; y: number }[]) {
-  if (pts.length < 2) return '';
-  let d = `M ${pts[0].x},${pts[0].y}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const curr = pts[i];
-    const next = pts[i + 1];
-    const tension = 0.3;
-    const dx = next.x - curr.x;
-    d += ` C ${curr.x + dx * tension},${curr.y} ${next.x - dx * tension},${next.y} ${next.x},${next.y}`;
+const MOOD_TO_EMOJI: Record<string, string> = {
+  Happy: "🙂",
+  Calm: "🙂",
+  Neutral: "😐",
+  Surprised: "😐",
+  Tired: "😔",
+  Sad: "😔",
+  Anxious: "😔",
+  Angry: "😔",
+};
+
+function getDayKeyLocal(date: Date) {
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+function getLast7Days(now = new Date()) {
+  const days: Array<{ dayKey: string; day: string }> = [];
+  for (let offset = 6; offset >= 0; offset--) {
+    const d = new Date(now);
+    d.setDate(now.getDate() - offset);
+    days.push({
+      dayKey: getDayKeyLocal(d),
+      day: d.toLocaleDateString("en-US", { weekday: "short" }),
+    });
   }
-  return d;
+  return days;
 }
 
-function buildAreaPath(pts: { x: number; y: number }[]) {
-  const linePath = buildSmoothPath(pts);
-  const bottomY = PADDING_TOP + plotHeight;
-  return `${linePath} L ${pts[pts.length - 1].x},${bottomY} L ${pts[0].x},${bottomY} Z`;
+function emojiToScore(emoji: string) {
+  switch (emoji) {
+    case "🙂":
+    case "😄":
+      return 90;
+    case "😐":
+    case "😌":
+      return 55;
+    case "😔":
+    case "😢":
+    case "😟":
+      return 25;
+    case "😡":
+      return 15;
+    default:
+      return 50;
+  }
 }
 
-function formatDate(date: Date): string {
-  return `${date.getDate()}/${date.getMonth() + 1}`;
+function getEmojiForEntry(entry: StoredMoodEntry | undefined, fallbackEmoji: string) {
+  if (!entry) return fallbackEmoji;
+  return entry.emoji || MOOD_TO_EMOJI[entry.mood] || fallbackEmoji;
+}
+
+function buildMoodDays(entries: StoredMoodEntry[], mockEmojisByIndex: readonly string[]): MoodDay[] {
+  const last7 = getLast7Days();
+  const byDay = new Map<string, StoredMoodEntry>();
+
+  for (const e of entries) {
+    const key = getDayKeyLocal(e.timestamp);
+    const existing = byDay.get(key);
+    if (!existing || e.timestamp > existing.timestamp) {
+      byDay.set(key, e);
+    }
+  }
+
+  return last7.map((d, idx) => {
+    const entry = byDay.get(d.dayKey);
+    const fallbackEmoji = mockEmojisByIndex[idx] ?? "😐";
+    const emoji = getEmojiForEntry(entry, fallbackEmoji);
+    return {
+      dayKey: d.dayKey,
+      day: d.day,
+      emoji,
+      score: emojiToScore(emoji),
+      hasEntry: Boolean(entry),
+    };
+  });
+}
+
+function computeMoodImprovementPercent(moodDays: MoodDay[]) {
+  const first = moodDays.slice(0, 3);
+  const last = moodDays.slice(3);
+  const avg = (arr: MoodDay[]) =>
+    arr.reduce((sum, d) => sum + d.score, 0) / Math.max(1, arr.length);
+
+  const oldAvg = avg(first);
+  const newAvg = avg(last);
+  const pct = ((newAvg - oldAvg) / Math.max(oldAvg, 1)) * 100;
+  if (!Number.isFinite(pct)) return MOCK_STATS.moodImprovement;
+  return Math.round(pct);
+}
+
+function formatSignedPercent(value: number) {
+  const sign = value >= 0 ? "+" : "";
+  return `${sign}${value}%`;
 }
 
 export default function ProgressScreen() {
   const { user } = useAuth();
+
   const [entries, setEntries] = useState<StoredMoodEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [moodDays, setMoodDays] = useState<MoodDay[]>(() =>
+    buildMoodDays([], MOCK_MOOD_EMOJIS),
+  );
+  const [stats, setStats] = useState(() => ({
+    completedExercises: MOCK_STATS.completedExercises,
+    activeDays: MOCK_STATS.activeDays,
+    moodImprovement: MOCK_STATS.moodImprovement,
+  }));
+  const [dataSource, setDataSource] = useState<"mock" | "live">("mock");
 
   useFocusEffect(
     useCallback(() => {
-      if (!user) return;
       let active = true;
-      setLoading(true);
+
+      if (!user) {
+        setEntries([]);
+        setDataSource("mock");
+        return () => {
+          active = false;
+        };
+      }
+
+      // Fetch live mood data (no blocking spinner; UI renders mock immediately).
       getMoodHistory(user.uid, 30)
-        .then((data) => { if (active) setEntries(data); })
-        .catch((e) => console.error('Failed to load mood history:', e))
-        .finally(() => { if (active) setLoading(false); });
-      return () => { active = false; };
+        .then((data) => {
+          if (!active) return;
+          setEntries(data);
+          setDataSource(data.length > 0 ? "live" : "mock");
+        })
+        .catch((e) => {
+          console.warn("Failed to load mood history:", e);
+          if (!active) return;
+          setEntries([]);
+          setDataSource("mock");
+        });
+
+      return () => {
+        active = false;
+      };
     }, [user]),
   );
 
-  // Reverse to chronological order for chart
-  const chronological = [...entries].reverse();
+  useEffect(() => {
+    const computedMoodDays = buildMoodDays(entries, MOCK_MOOD_EMOJIS);
+    const activeDays =
+      entries.length > 0
+        ? computedMoodDays.filter((d) => d.hasEntry).length
+        : MOCK_STATS.activeDays;
+    const moodImprovement =
+      entries.length > 0
+        ? computeMoodImprovementPercent(computedMoodDays)
+        : MOCK_STATS.moodImprovement;
 
-  const graphData = chronological.map((e) => ({
-    label: formatDate(e.timestamp),
-    value: MOOD_SCORES[e.mood] ?? 50,
-    emoji: e.emoji,
-  }));
+    setMoodDays(computedMoodDays);
+    setStats({
+      completedExercises: MOCK_STATS.completedExercises,
+      activeDays,
+      moodImprovement,
+    });
+  }, [entries]);
 
-  const points = graphData.map((d, i) => {
-    const count = Math.max(graphData.length - 1, 1);
-    const x = PADDING_LEFT + (i / count) * plotWidth;
-    const y = PADDING_TOP + plotHeight - (d.value / MAX_VAL) * plotHeight;
-    return { x, y, label: d.label, value: d.value };
-  });
+  const trendText = useMemo(() => {
+    if (stats.moodImprovement > 0) return "Improving";
+    if (stats.moodImprovement < 0) return "Needs attention";
+    return "Steady";
+  }, [stats.moodImprovement]);
 
-  const linePath = points.length >= 2 ? buildSmoothPath(points) : '';
-  const areaPath = points.length >= 2 ? buildAreaPath(points) : '';
-  const yLabels = [0, 25, 50, 75, 100];
+  const statCards = useMemo(() => {
+    const moodAccent = stats.moodImprovement >= 0 ? NAFS.success : NAFS.error;
 
-  // Stats
-  const moodCounts: Record<string, number> = {};
-  entries.forEach((e) => { moodCounts[e.mood] = (moodCounts[e.mood] || 0) + 1; });
-  const topMood = Object.entries(moodCounts).sort((a, b) => b[1] - a[1])[0];
-  const avgScore = entries.length > 0
-    ? Math.round(entries.reduce((sum, e) => sum + (MOOD_SCORES[e.mood] ?? 50), 0) / entries.length)
-    : 0;
-  const latestMood = entries.length > 0 ? entries[0] : null;
+    return [
+      {
+        key: "completed",
+        value: stats.completedExercises,
+        label: "Completed Exercises",
+        icon: "dumbbell" as ComponentProps<typeof MaterialCommunityIcons>["name"],
+        accentColor: "#4CAF50",
+        subLabel: "This week",
+      },
+      {
+        key: "activeDays",
+        value: `${stats.activeDays}`,
+        label: "Active Days",
+        icon: "calendar-check" as ComponentProps<typeof MaterialCommunityIcons>["name"],
+        accentColor: NAFS.blue,
+        subLabel: "With mood check-ins",
+      },
+      {
+        key: "moodImprovement",
+        value: formatSignedPercent(stats.moodImprovement),
+        label: "Mood Improvement",
+        icon: stats.moodImprovement >= 0 ? ("trending-up" as ComponentProps<typeof MaterialCommunityIcons>["name"]) : ("trending-down" as ComponentProps<typeof MaterialCommunityIcons>["name"]),
+        accentColor: moodAccent,
+        subLabel: trendText,
+      },
+    ];
+  }, [stats.activeDays, stats.completedExercises, stats.moodImprovement, trendText]);
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.header}>
           <Image
-            source={require('@/assets/images/nafs_logo.png')}
-            style={{ width: 80, height: 80 }}
+            source={require("@/assets/images/nafs_logo.png")}
+            style={styles.logo}
             resizeMode="contain"
           />
-          <Text style={styles.title}>Mental Well-being Progress</Text>
+          <Text style={styles.title}>Progress Dashboard</Text>
+          <Text style={styles.subtitle}>Mood trends + activity stats</Text>
         </View>
 
-        {loading ? (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator size="large" color={NAFS.blue} />
-          </View>
-        ) : entries.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyEmoji}>📊</Text>
-            <Text style={styles.emptyTitle}>No mood data yet</Text>
-            <Text style={styles.emptyText}>Check your mood from the home screen to start tracking your progress.</Text>
-          </View>
-        ) : (
-          <>
-            {/* Recent moods row */}
-            <View style={styles.recentRow}>
-              {entries.slice(0, 5).map((e, i) => (
-                <View key={e.id} style={styles.recentItem}>
-                  <Text style={styles.recentEmoji}>{e.emoji}</Text>
-                  <Text style={styles.recentDate}>{formatDate(e.timestamp)}</Text>
-                </View>
-              ))}
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>Daily Mood (Last 7 Days)</Text>
+            <View style={[styles.pill, { backgroundColor: dataSource === "live" ? NAFS.blue + "14" : NAFS.greyLight }]}>
+              <Text style={styles.pillText}>{dataSource === "live" ? "Live data" : "Mock data"}</Text>
             </View>
+          </View>
 
-            {/* Graph */}
-            {points.length >= 2 && (
-              <View style={styles.graphCard}>
-                <Text style={styles.graphTitle}>Mood Score</Text>
-                <Svg width={CHART_WIDTH} height={CHART_HEIGHT}>
-                  <Defs>
-                    <LinearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                      <Stop offset="0" stopColor={NAFS.blue} stopOpacity="0.25" />
-                      <Stop offset="1" stopColor={NAFS.blue} stopOpacity="0.02" />
-                    </LinearGradient>
-                  </Defs>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.moodRow}
+          >
+            {moodDays.map((d) => (
+              <MoodCard key={d.dayKey} day={d.day} emoji={d.emoji} score={d.score} />
+            ))}
+          </ScrollView>
+        </View>
 
-                  {yLabels.map((val) => {
-                    const y = PADDING_TOP + plotHeight - (val / MAX_VAL) * plotHeight;
-                    return (
-                      <G key={val}>
-                        <Line
-                          x1={PADDING_LEFT} y1={y}
-                          x2={CHART_WIDTH - PADDING_RIGHT} y2={y}
-                          stroke={NAFS.greyLight} strokeWidth={0.8} strokeDasharray="4,4"
-                        />
-                        <SvgText x={PADDING_LEFT - 10} y={y + 4} fontSize={10} fill={NAFS.grey} textAnchor="end">{val}</SvgText>
-                      </G>
-                    );
-                  })}
-
-                  <Path d={areaPath} fill="url(#areaGradient)" />
-                  <Path d={linePath} fill="none" stroke={NAFS.blue} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
-
-                  {points.map((p, i) => (
-                    <G key={i}>
-                      <Circle cx={p.x} cy={p.y} r={8} fill={NAFS.blue} opacity={0.12} />
-                      <Circle cx={p.x} cy={p.y} r={4.5} fill={NAFS.white} stroke={NAFS.blue} strokeWidth={2.5} />
-                    </G>
-                  ))}
-
-                  {points.map((p, i) => (
-                    <SvgText key={`l${i}`} x={p.x} y={CHART_HEIGHT - 8} fontSize={9} fill={NAFS.grey} textAnchor="middle">{p.label}</SvgText>
-                  ))}
-                </Svg>
-              </View>
-            )}
-
-            {/* Stats */}
-            <View style={styles.statsContainer}>
-              <View style={styles.statCard}>
-                <View style={styles.statIconRow}>
-                  <View style={[styles.statDot, { backgroundColor: '#4CAF50' }]} />
-                  <Text style={styles.statLabel}>Most Common Mood</Text>
-                </View>
-                <Text style={styles.statValue}>{topMood ? topMood[0] : '—'}</Text>
-              </View>
-
-              <View style={styles.statCard}>
-                <View style={styles.statIconRow}>
-                  <View style={[styles.statDot, { backgroundColor: NAFS.blue }]} />
-                  <Text style={styles.statLabel}>Average Score</Text>
-                </View>
-                <Text style={styles.statValue}>{avgScore}%</Text>
-              </View>
-
-              <View style={styles.statCard}>
-                <View style={styles.statIconRow}>
-                  <View style={[styles.statDot, { backgroundColor: '#AB47BC' }]} />
-                  <Text style={styles.statLabel}>Total Check-ins</Text>
-                </View>
-                <Text style={styles.statValue}>{entries.length}</Text>
-              </View>
-
-              {latestMood && (
-                <View style={styles.statCard}>
-                  <View style={styles.statIconRow}>
-                    <Text style={{ fontSize: 16 }}>{latestMood.emoji}</Text>
-                    <Text style={styles.statLabel}>Latest Mood</Text>
-                  </View>
-                  <Text style={styles.statValue}>{latestMood.mood}</Text>
-                </View>
-              )}
+        <View style={styles.statsGrid}>
+          {statCards.map((c) => (
+            <View key={c.key} style={styles.statsGridItem}>
+              <StatCard value={c.value} label={c.label} icon={c.icon} accentColor={c.accentColor} subLabel={c.subLabel} />
             </View>
-          </>
-        )}
+          ))}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -230,129 +277,74 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   header: {
-    alignItems: 'center',
-    marginBottom: 24,
-    marginTop: 8,
+    alignItems: "center",
+    marginBottom: 18,
+    marginTop: 6,
   },
   logo: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: NAFS.navy,
-    letterSpacing: 4,
-    marginTop: 6,
-    marginBottom: 4,
+    width: 76,
+    height: 76,
+    marginBottom: 8,
   },
   title: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 19,
+    fontWeight: "900",
     color: NAFS.blue,
+    marginBottom: 3,
   },
-  loadingWrap: {
-    paddingVertical: 60,
-    alignItems: 'center',
-  },
-  emptyCard: {
-    backgroundColor: NAFS.white,
-    borderRadius: 20,
-    padding: 36,
-    alignItems: 'center',
-    shadowColor: NAFS.navy,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-  emptyEmoji: {
-    fontSize: 48,
-    marginBottom: 16,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: NAFS.navy,
-    marginBottom: 8,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: NAFS.grey,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  recentRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 16,
-    marginBottom: 20,
-  },
-  recentItem: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  recentEmoji: {
-    fontSize: 28,
-  },
-  recentDate: {
-    fontSize: 10,
-    color: NAFS.navy,
-    fontWeight: '500',
-  },
-  graphCard: {
-    backgroundColor: NAFS.white,
-    borderRadius: 20,
-    paddingTop: 20,
-    paddingBottom: 12,
-    paddingHorizontal: 12,
-    marginBottom: 20,
-    alignItems: 'center',
-    shadowColor: NAFS.navy,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-  graphTitle: {
+  subtitle: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: "700",
     color: NAFS.grey,
-    letterSpacing: 0.5,
-    marginBottom: 8,
-    alignSelf: 'flex-start',
-    marginLeft: 12,
   },
-  statsContainer: {
-    gap: 12,
-  },
-  statCard: {
+  sectionCard: {
     backgroundColor: NAFS.white,
-    borderRadius: 16,
-    padding: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
+    borderRadius: 26,
+    padding: 16,
+    marginBottom: 18,
     shadowColor: NAFS.navy,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: NAFS.greyLight,
   },
-  statIconRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    gap: 10,
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
   },
-  statDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  statLabel: {
-    fontSize: 15,
-    fontWeight: '600',
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: "900",
     color: NAFS.navy,
   },
-  statValue: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: NAFS.blue,
+  pill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: NAFS.greyLight,
+  },
+  pillText: {
+    fontSize: 11,
+    fontWeight: "900",
+    color: NAFS.grey,
+  },
+  moodRow: {
+    paddingVertical: 6,
+    gap: 12,
+    alignItems: "center",
+    justifyContent: "flex-start",
+  },
+  statsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 14,
+  },
+  statsGridItem: {
+    width: "48%",
   },
 });
