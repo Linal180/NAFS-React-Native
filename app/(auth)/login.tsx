@@ -97,7 +97,7 @@ export default function LoginScreen() {
           {/* Create account link */}
           <TouchableOpacity
             style={styles.createWrap}
-            onPress={() => router.replace("/(tabs)")}
+            onPress={() => router.push("/(auth)/signup")}
             activeOpacity={0.7}
           >
             <Text style={styles.createText}>Create an account</Text>
