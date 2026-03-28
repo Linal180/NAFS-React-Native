@@ -63,7 +63,7 @@ export default function LoginScreen() {
           />
 
           {/* Welcome copy */}
-          <Text style={styles.welcomeTitle}>Welcome to NAFS</Text>
+          <Text style={styles.welcomeTitle}>Welcome to NAFSE</Text>
           <Text style={styles.welcomeSub}>Your private space to reset.</Text>
 
           {/* Auth buttons */}

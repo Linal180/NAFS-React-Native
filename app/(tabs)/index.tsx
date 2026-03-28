@@ -1,61 +1,119 @@
-import { ClipboardIcon } from "@/components/ui/app-icons";
+import { DailyPlanCard } from "@/components/DailyPlanCard";
+import { FlowIndicator, type StepKey } from "@/components/FlowIndicator";
+import { MoodHistory } from "@/components/MoodHistory";
+import { MoodSelector } from "@/components/MoodSelector";
+import { QuoteCard } from "@/components/QuoteCard";
+import { TipCard } from "@/components/TipCard";
+import { BreathingIcon, ChatSupportIcon } from "@/components/ui/app-icons";
+import type { MoodId } from "@/constants/moods";
 import { NAFS } from "@/constants/theme";
 import { useAuth } from "@/contexts/auth-context";
-import { useRouter } from "expo-router";
 import {
-  Image,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    loadLocalMoodState,
+    persistMoodHistory,
+    persistSelectedMood,
+    type LocalMoodHistoryEntry,
+} from "@/lib/local-mood-history";
+import { useRouter } from "expo-router";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+    ActivityIndicator,
+    Image,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Svg, { Circle, Line, Path, Rect } from "react-native-svg";
-
-function CuteBotIcon({ size = 32 }: { size?: number }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 64 64">
-      {/* Antenna */}
-      <Line
-        x1="32"
-        y1="8"
-        x2="32"
-        y2="16"
-        stroke="#7EC8C8"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-      <Circle cx="32" cy="6" r="4" fill="#F6C358" />
-      {/* Head */}
-      <Rect x="12" y="16" width="40" height="36" rx="12" fill="#7EC8C8" />
-      {/* Face plate */}
-      <Rect x="18" y="22" width="28" height="24" rx="8" fill="#E8F6F6" />
-      {/* Eyes */}
-      <Circle cx="26" cy="32" r="3.5" fill="#4A5568" />
-      <Circle cx="38" cy="32" r="3.5" fill="#4A5568" />
-      {/* Eye shine */}
-      <Circle cx="27.5" cy="30.5" r="1.2" fill="#FFFFFF" />
-      <Circle cx="39.5" cy="30.5" r="1.2" fill="#FFFFFF" />
-      {/* Smile */}
-      <Path
-        d="M26 39 Q32 44 38 39"
-        stroke="#4A5568"
-        strokeWidth="2"
-        strokeLinecap="round"
-        fill="none"
-      />
-      {/* Ears */}
-      <Rect x="6" y="28" width="6" height="10" rx="3" fill="#7EC8C8" />
-      <Rect x="52" y="28" width="6" height="10" rx="3" fill="#7EC8C8" />
-    </Svg>
-  );
-}
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const firstName = user?.displayName?.split(" ")[0] || "there";
+
+  const [selectedMoodId, setSelectedMoodId] = useState<MoodId>("neutral");
+  const [moodHistory, setMoodHistory] = useState<LocalMoodHistoryEntry[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [completedSteps, setCompletedSteps] = useState<StepKey[]>([]);
+
+  useEffect(() => {
+    async function init() {
+      try {
+        const { selectedMoodId: savedMood, moodHistory: savedHistory } = await loadLocalMoodState();
+        setSelectedMoodId(savedMood);
+        setMoodHistory(savedHistory);
+
+        // Check if mood was set today
+        const lastMood = savedHistory[0];
+        const isMoodToday = lastMood && new Date(lastMood.timestamp).toDateString() === new Date().toDateString();
+        
+        if (isMoodToday) {
+          setCompletedSteps(prev => [...new Set([...prev, "mood" as StepKey])]);
+        }
+      } catch (error) {
+        console.error("Failed to load mood state:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    init();
+  }, []);
+
+  const handleMoodSelect = useCallback(async (moodId: MoodId) => {
+    setSelectedMoodId(moodId);
+    await persistSelectedMood(moodId);
+
+    const newEntry: LocalMoodHistoryEntry = {
+      id: Date.now().toString(),
+      moodId,
+      timestamp: new Date().toISOString(),
+    };
+
+    setMoodHistory(prev => {
+      const updated = [newEntry, ...prev].slice(0, 5);
+      persistMoodHistory(updated);
+      return updated;
+    });
+
+    setCompletedSteps(prev => [...new Set([...prev, "mood" as StepKey])]);
+  }, []);
+
+  const currentStep = useMemo((): StepKey => {
+    if (!completedSteps.includes("mood")) return "mood";
+    if (!completedSteps.includes("plan")) return "plan";
+    if (!completedSteps.includes("exercises")) return "exercises";
+    if (!completedSteps.includes("chat")) return "chat";
+    return "progress";
+  }, [completedSteps]);
+
+  const handleStepPress = (step: { key: StepKey; route?: string }) => {
+    if (step.route) {
+      if (step.key === "chat" || step.key === "progress") {
+        // These are in tabs
+        router.push({
+          pathname: `/(tabs)/${step.key === "chat" ? "chatbot" : "progress"}`,
+          params: { mood: selectedMoodId }
+        });
+      } else {
+        router.push({
+          pathname: step.route as any,
+          params: { mood: selectedMoodId }
+        });
+      }
+      setCompletedSteps(prev => [...new Set([...prev, step.key])]);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={NAFS.blue} />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -64,374 +122,180 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Image
-            source={require("@/assets/images/nafs_logo.png")}
-            style={styles.logoImage}
-            resizeMode="contain"
+          <View style={styles.headerLeft}>
+            <Image
+              source={require("@/assets/images/nafs_logo.png")}
+              style={styles.logoImage}
+              resizeMode="contain"
+            />
+            <View>
+              <Text style={styles.welcome}>Hi, {firstName}</Text>
+              <Text style={styles.subtitle}>Welcome back to your safe space.</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.content}>
+          {/* Step 1: Guided Flow Indicator */}
+          <FlowIndicator 
+            currentStep={currentStep} 
+            completedSteps={completedSteps} 
+            onStepPress={handleStepPress}
           />
-          {/* <Text style={styles.welcome}>Welcome, {firstName}</Text>
-          <Text style={styles.subtitle}>How are you feeling today?</Text> */}
-        </View>
 
-        {/* <View style={styles.moodCard}>
-          <Text style={styles.moodCardEmoji}>🪞</Text>
-          <Text style={styles.moodCardTitle}>Ready for a mood check?</Text>
-          <Text style={styles.moodCardSub}>
-            Take a quick selfie and let AI detect how you're feeling
-          </Text>
-          <TouchableOpacity
-            style={styles.moodButton}
-            activeOpacity={0.85}
-            onPress={() => router.push("/selfie-capture")}
-          >
-            <Text style={styles.moodButtonText}>Check My Mood</Text>
-          </TouchableOpacity>
-        </View> */}
+          {/* Step 2: Mood Selector (Prioritized if not done) */}
+          <MoodSelector 
+            selectedMoodId={selectedMoodId} 
+            onSelect={handleMoodSelect} 
+            title={completedSteps.includes("mood") ? "How you're feeling today" : "Step 1: How are you feeling?"}
+          />
 
-        {/* <Text style={styles.sectionLabel}>Quick Actions</Text> */}
-        <View style={styles.tilesRow}>
-          <TouchableOpacity
-            style={styles.card}
-            onPress={() => router.push("/selfie-capture")}
-            activeOpacity={0.9}
-          >
-            {/* Header Section */}
-            <View style={styles.cardHeader}>
-              <Text style={{ fontSize: 22 }}>🧠</Text>
-              <Text style={styles.headerText}>Mood Check</Text>
-            </View>
+          {/* Step 3: Daily Plan (Becomes prominent after mood) */}
+          <DailyPlanCard 
+            moodId={selectedMoodId} 
+            onPressViewPlan={() => {
+              setCompletedSteps(prev => [...new Set([...prev, "plan" as StepKey])]);
+              router.push("/daily-plan");
+            }} 
+          />
 
-            {/* Process Flow Section */}
-            <View style={styles.flowContainer}>
-              <View style={styles.iconCircle}>
-                <Text
-                  style={{ fontSize: 28, textAlign: "center", lineHeight: 34 }}
-                >
-                  📷
-                </Text>
+          {/* Next Steps / Exercises */}
+          <View style={styles.nextStepsHeader}>
+            <Text style={styles.sectionTitle}>Continue your journey</Text>
+            <TouchableOpacity onPress={() => router.push({ pathname: "/exercises", params: { mood: selectedMoodId } })}>
+              <Text style={styles.seeAll}>See Exercises →</Text>
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.quickActionsGrid}>
+            <TouchableOpacity 
+              style={styles.quickActionCard} 
+              onPress={() => {
+                setCompletedSteps(prev => [...new Set([...prev, "exercises" as StepKey])]);
+                router.push({ pathname: "/exercises", params: { mood: selectedMoodId } });
+              }}
+            >
+              <View style={styles.quickActionIconWrap}>
+                <BreathingIcon size={24} color={NAFS.blue} />
               </View>
-
-              <Text style={styles.flowArrow}>→</Text>
-
-              <View style={styles.iconCircle}>
-                <CuteBotIcon size={38} />
+              <Text style={styles.quickActionText}>Exercises</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.quickActionCard} 
+              onPress={() => {
+                setCompletedSteps(prev => [...new Set([...prev, "chat" as StepKey])]);
+                router.push({ pathname: "/(tabs)/chatbot", params: { mood: selectedMoodId } });
+              }}
+            >
+              <View style={styles.quickActionIconWrap}>
+                <ChatSupportIcon size={24} color={NAFS.blue} />
               </View>
+              <Text style={styles.quickActionText}>Chat NAFS</Text>
+            </TouchableOpacity>
+          </View>
 
-              <Text style={styles.flowArrow}>→</Text>
-
-              <View style={styles.iconCircle}>
-                <Text
-                  style={{ fontSize: 28, textAlign: "center", lineHeight: 34 }}
-                >
-                  😊
-                </Text>
-              </View>
-            </View>
-          </TouchableOpacity>
+          <QuoteCard moodId={selectedMoodId} />
+          <TipCard moodId={selectedMoodId} />
+          <MoodHistory history={moodHistory} />
         </View>
-        <View style={{ alignItems: "center", marginBottom: 14 }}>
-          <TouchableOpacity
-            style={styles.dailyPlanTile}
-            activeOpacity={0.8}
-            onPress={() => router.push("/daily-plan")}
-          >
-            <View style={styles.dailyPlanIconWrap}>
-              <ClipboardIcon size={28} color={NAFS.blue} />
-            </View>
-            <Text style={styles.tileText}>Daily Plan</Text>
-          </TouchableOpacity>
-          {/* <TouchableOpacity
-            style={styles.tile}
-            activeOpacity={0.8}
-            onPress={() => router.push("/(tabs)/chatbot")}
-          >
-            <View
-              style={[
-                styles.tileIconWrap,
-                { backgroundColor: "#AB47BC" + "12" },
-              ]}
-            >
-              <ChatSupportIcon size={28} color="#AB47BC" />
-            </View>
-            <Text style={styles.tileText}>AI Chat{"\n"}Support</Text>
-          </TouchableOpacity> */}
-        </View>
-        {/* <TouchableOpacity
-            style={styles.tile}
-            activeOpacity={0.8}
-            onPress={() => router.push("/exercises")}
-          >
-            <View
-              style={[
-                styles.tileIconWrap,
-                { backgroundColor: "#EE5656" + "12" },
-              ]}
-            >
-              <MaterialCommunityIcons name="brain" size={28} color="#EE5656" />
-            </View>
-            <Text style={styles.tileText}>Mood Check</Text>
-          </TouchableOpacity> */}
-        {/* <View style={styles.tilesRow}>
-          <TouchableOpacity style={styles.tile} activeOpacity={0.8}>
-            <View
-              style={[
-                styles.tileIconWrap,
-                { backgroundColor: "#26A69A" + "12" },
-              ]}
-            >
-              <ChildIcon size={28} color="#26A69A" />
-            </View>
-            <Text style={styles.tileText}>Children{"\n"}Wellness</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.tile}
-            activeOpacity={0.8}
-            onPress={() => router.push("/exercises")}
-          >
-            <View
-              style={[
-                styles.tileIconWrap,
-                { backgroundColor: "#EF5350" + "12" },
-              ]}
-            >
-              <DumbbellIcon size={28} color="#EF5350" />
-            </View>
-            <Text style={styles.tileText}>Exercises</Text>
-          </TouchableOpacity>
-        </View> */}
-
-        {/* <TouchableOpacity
-          style={styles.signOutButton}
-          activeOpacity={0.8}
-          onPress={async () => {
-            try {
-              await signOut();
-              if (router.canDismiss()) router.dismissAll();
-              router.replace("/(auth)/login");
-            } catch {
-              // error handled in context
-            }
-          }}
-        >
-          <Text style={styles.signOutIcon}>↪</Text>
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity> */}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: NAFS.white,
-    borderRadius: 24,
-    paddingVertical: 24,
-    paddingHorizontal: 20,
-    width: "100%",
-    shadowColor: NAFS.navy,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 14,
-    elevation: 3,
-  },
-  cardHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 16,
-    gap: 8,
-  },
-  headerText: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#3A3A6A",
-  },
-  flowContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-around",
-    paddingHorizontal: 10,
-  },
-  iconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: "#EDEAFC",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  flowArrow: {
-    fontSize: 16,
-    color: "#C4C4C4",
-  },
   container: {
     flex: 1,
     backgroundColor: NAFS.lavender,
   },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   scroll: {
     flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 40,
+    paddingBottom: 24,
   },
   header: {
+    paddingTop: 10,
+    marginBottom: 16,
+    paddingHorizontal: 20,
+  },
+  headerLeft: {
+    flexDirection: "row",
     alignItems: "center",
-    marginBottom: 24,
-    marginTop: 8,
+    gap: 12,
   },
   logoImage: {
-    width: 100,
-    height: 100,
-    marginBottom: 10,
+    width: 50,
+    height: 50,
   },
   welcome: {
-    fontSize: 26,
-    fontWeight: "700",
+    fontSize: 22,
+    fontWeight: "800",
     color: NAFS.navy,
   },
   subtitle: {
-    fontSize: 15,
+    fontSize: 13,
+    fontWeight: "600",
     color: NAFS.grey,
-    textAlign: "center",
-    marginTop: 4,
+    marginTop: 1,
   },
-  moodCard: {
-    backgroundColor: NAFS.white,
-    borderRadius: 24,
-    padding: 28,
-    alignItems: "center",
-    marginBottom: 28,
-    shadowColor: NAFS.navy,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
-    elevation: 5,
+  content: {
+    paddingHorizontal: 16,
+    gap: 12,
   },
-  moodCardEmoji: {
-    fontSize: 40,
-    marginBottom: 12,
-  },
-  moodCardTitle: {
+  sectionTitle: {
     fontSize: 18,
-    fontWeight: "700",
+    fontWeight: "800",
     color: NAFS.navy,
-    marginBottom: 6,
   },
-  moodCardSub: {
-    fontSize: 13,
-    color: NAFS.grey,
-    textAlign: "center",
-    lineHeight: 19,
-    marginBottom: 20,
-  },
-  moodButton: {
-    backgroundColor: NAFS.blue,
-    borderRadius: 16,
-    paddingVertical: 15,
-    width: "100%",
-    alignItems: "center",
-    shadowColor: NAFS.blue,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  moodButtonText: {
-    color: NAFS.white,
-    fontSize: 16,
-    fontWeight: "700",
-    letterSpacing: 0.3,
-  },
-  sectionLabel: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: NAFS.navy,
-    marginBottom: 14,
-    alignSelf: "flex-start",
-  },
-  tilesRow: {
+  nextStepsHeader: {
     flexDirection: "row",
-    gap: 14,
-    marginBottom: 14,
-    width: "100%",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 8,
+    paddingHorizontal: 4,
   },
-  tile: {
+  seeAll: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: NAFS.blue,
+  },
+  quickActionsGrid: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  quickActionCard: {
     flex: 1,
-    backgroundColor: NAFS.white,
-    borderRadius: 20,
-    padding: 20,
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 120,
-    shadowColor: NAFS.navy,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.07,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  dailyPlanTile: {
-    backgroundColor: NAFS.white,
-    borderRadius: 20,
-    paddingVertical: 20,
-    paddingHorizontal: 36,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: NAFS.navy,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.07,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  dailyPlanIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: NAFS.blue + "15",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 10,
-  },
-  tileIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 12,
-  },
-  tileText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: NAFS.navy,
-    textAlign: "center",
-    lineHeight: 18,
-  },
-  signOutButton: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    alignSelf: "center",
-    gap: 8,
-    marginTop: 16,
-    marginBottom: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 32,
+    gap: 12,
     backgroundColor: NAFS.white,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: NAFS.error + "30",
-    shadowColor: NAFS.error,
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    shadowColor: NAFS.navy,
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
     elevation: 2,
+    borderWidth: 1,
+    borderColor: NAFS.greyLight,
   },
-  signOutIcon: {
-    fontSize: 16,
-    color: NAFS.error,
+  quickActionIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: NAFS.blue + "12",
   },
-  signOutText: {
-    color: NAFS.error,
+  quickActionText: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
+    color: NAFS.navy,
   },
 });

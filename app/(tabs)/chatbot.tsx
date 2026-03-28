@@ -1,27 +1,94 @@
-import { useState, useRef, useCallback } from 'react';
-import { StyleSheet, View, Text, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { NAFS } from '@/constants/theme';
 import { BotIcon } from '@/components/ui/app-icons';
+import { getExerciseById } from '@/constants/exercises';
+import { MoodId, getMoodMeta } from '@/constants/moods';
+import { NAFS } from '@/constants/theme';
 import { sendChatMessage } from '@/lib/gemini';
+import { loadLocalMoodState } from '@/lib/local-mood-history';
 import type { Content } from '@google/generative-ai';
+import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 type Message = {
   id: string;
   text: string;
   isUser: boolean;
+  recommendedExerciseId?: string;
 };
 
-const SUGGESTIONS = ['How to relax?', 'Breathing tips', 'Motivate me'];
+const SUGGESTIONS_BY_MOOD: Record<MoodId, string[]> = {
+  happy: ['Keep the momentum', 'Gratitude ideas', 'Productivity tips', 'Share joy'],
+  neutral: ['Morning routine', 'Mindful walk', 'Small goals', 'Relaxation'],
+  sad: ['Self-care tips', 'Gentle movement', 'Motivation', 'I feel down'],
+  anxious: ['Breathing tips', 'Stop overthinking', 'Grounding', 'Quick calm'],
+  angry: ['Release tension', 'Cool down', 'Safe outlet', 'Patience'],
+};
+
+const DEFAULT_SUGGESTIONS = [
+  'How to relax?',
+  'Breathing tips',
+  'Motivate me',
+  'I feel stressed',
+  "I can't sleep",
+];
+
+function detectRecommendedExerciseId(text: string): string | undefined {
+  const lower = text.toLowerCase();
+
+  if (lower.includes("can't sleep") || lower.includes('cant sleep') || lower.includes('insomnia') || lower.includes('sleep')) {
+    return 'relaxation-sounds';
+  }
+
+  if (lower.includes('stressed') || lower.includes('stress') || lower.includes('overwhelmed') || lower.includes('anxious')) {
+    return 'deep-breathing';
+  }
+
+  if (lower.includes('relax')) {
+    return 'relaxation-sounds';
+  }
+
+  if (lower.includes('breathe') || lower.includes('breathing') || lower.includes('breath')) {
+    return 'deep-breathing';
+  }
+
+  if (lower.includes('motivate') || lower.includes('unmotivated') || lower.includes('no motivation')) {
+    return 'gratitude-practice';
+  }
+
+  return undefined;
+}
 
 export default function ChatbotScreen() {
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', text: 'Hi there! I\'m your NAFS wellness assistant. How are you feeling today?', isUser: false },
-  ]);
+  const router = useRouter();
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [currentMood, setCurrentMood] = useState<MoodId | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const historyRef = useRef<Content[]>([]);
+
+  useEffect(() => {
+    async function init() {
+      const { selectedMoodId } = await loadLocalMoodState();
+      setCurrentMood(selectedMoodId);
+      
+      const moodMeta = selectedMoodId ? getMoodMeta(selectedMoodId) : null;
+      const initialText = moodMeta 
+        ? `Hi there! I see you're feeling ${moodMeta.label} today ${moodMeta.emoji}. I'm here to support you. What's on your mind?`
+        : "Hi there! I'm your NAFS wellness assistant. How are you feeling today?";
+        
+      setMessages([{ id: '1', text: initialText, isUser: false }]);
+      
+      if (selectedMoodId) {
+        historyRef.current = [
+          { role: 'user', parts: [{ text: `I am feeling ${selectedMoodId} today.` }] },
+          { role: 'model', parts: [{ text: initialText }] },
+        ];
+      }
+    }
+    init();
+  }, []);
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isLoading) return;
@@ -30,15 +97,30 @@ export default function ChatbotScreen() {
     setInput('');
     setIsLoading(true);
 
+    const recommendedId = detectRecommendedExerciseId(text);
+
     try {
-      const reply = await sendChatMessage(historyRef.current, text.trim());
+      const moodContext = currentMood ? `[Context: User's current mood is ${currentMood}] ` : '';
+      const reply = await sendChatMessage(historyRef.current, moodContext + text.trim());
       historyRef.current = [
         ...historyRef.current,
         { role: 'user', parts: [{ text: text.trim() }] },
         { role: 'model', parts: [{ text: reply }] },
       ];
       const botMsg: Message = { id: (Date.now() + 1).toString(), text: reply, isUser: false };
-      setMessages((prev) => [...prev, botMsg]);
+      const botMessages: Message[] = [botMsg];
+
+      if (recommendedId && getExerciseById(recommendedId)) {
+        const recommendationMessage: Message = {
+          id: (Date.now() + 2).toString(),
+          text: 'Based on how you\'re feeling, I have a quick exercise you can try.',
+          isUser: false,
+          recommendedExerciseId: recommendedId,
+        };
+        botMessages.push(recommendationMessage);
+      }
+
+      setMessages((prev) => [...prev, ...botMessages]);
     } catch (e) {
       console.error('Chat error:', e);
       const errorMsg: Message = {
@@ -50,7 +132,9 @@ export default function ChatbotScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading]);
+  }, [isLoading, currentMood]);
+
+  const suggestions = currentMood ? SUGGESTIONS_BY_MOOD[currentMood] : DEFAULT_SUGGESTIONS;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -89,6 +173,36 @@ export default function ChatbotScreen() {
                 <Text style={[styles.messageText, item.isUser ? styles.userText : styles.botText]}>
                   {item.text}
                 </Text>
+                {!item.isUser && item.recommendedExerciseId && (
+                  (() => {
+                    const exercise = getExerciseById(item.recommendedExerciseId);
+                    if (!exercise) return null;
+                    const IconComponent = exercise.icon;
+                    return (
+                      <View style={styles.recommendationCard}>
+                        <View style={[styles.recommendationIconContainer, { backgroundColor: exercise.color + '12' }]}>
+                          <IconComponent size={22} color={exercise.color} />
+                        </View>
+                        <View style={styles.recommendationTextContainer}>
+                          <Text style={styles.recommendationTitle}>{exercise.title}</Text>
+                          <Text style={styles.recommendationSubtitle}>{exercise.subtitle}</Text>
+                          <TouchableOpacity
+                            style={[styles.recommendationButton, { backgroundColor: exercise.color }]}
+                            activeOpacity={0.85}
+                            onPress={() =>
+                              router.push({
+                                pathname: '/exercise-player',
+                                params: { id: exercise.id },
+                              })
+                            }
+                          >
+                            <Text style={styles.recommendationButtonText}>Start this exercise</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })()
+                )}
               </View>
             </View>
           )}
@@ -108,7 +222,7 @@ export default function ChatbotScreen() {
 
         {messages.length <= 1 && (
           <View style={styles.suggestionsRow}>
-            {SUGGESTIONS.map((s, i) => (
+            {suggestions.map((s, i) => (
               <TouchableOpacity
                 key={i}
                 style={styles.suggestionChip}
@@ -285,5 +399,48 @@ const styles = StyleSheet.create({
   sendButtonText: {
     color: NAFS.white,
     fontSize: 20,
+  },
+  recommendationCard: {
+    backgroundColor: NAFS.white,
+    borderRadius: 16,
+    padding: 12,
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: NAFS.greyLight,
+  },
+  recommendationIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recommendationTextContainer: {
+    flex: 1,
+  },
+  recommendationTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: NAFS.navy,
+    marginBottom: 2,
+  },
+  recommendationSubtitle: {
+    fontSize: 12,
+    color: NAFS.grey,
+    marginBottom: 8,
+  },
+  recommendationButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  recommendationButtonText: {
+    color: NAFS.white,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

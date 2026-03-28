@@ -1,8 +1,11 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getApp, getApps, initializeApp } from "firebase/app";
 // @ts-ignore – getReactNativePersistence exists in the RN bundle but TS resolves to web types
-import { getAuth, initializeAuth, getReactNativePersistence } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  getAuth,
+  // getReactNativePersistence,
+  initializeAuth,
+} from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -18,7 +21,9 @@ const app = isFirstInit ? initializeApp(firebaseConfig) : getApp();
 
 // initializeAuth must only be called once; on hot reload use getAuth
 const auth = isFirstInit
-  ? initializeAuth(app, { persistence: getReactNativePersistence(AsyncStorage) })
+  ? initializeAuth(app, {
+      // persistence: getReactNativePersistence(AsyncStorage),
+    })
   : getAuth(app);
 
 const db = getFirestore(app);
